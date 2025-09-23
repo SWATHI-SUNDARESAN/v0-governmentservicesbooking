@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { MapPin, Clock, Navigation, CheckCircle, ArrowLeft, Users } from "lucide-react"
+import { Clock, CheckCircle, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { tamilNaduData, talukCenters, serviceTypes } from "@/lib/tn-data"
 
@@ -28,6 +28,35 @@ export default function UserPortal() {
     address: "",
   })
   const [availableTimeSlots, setAvailableTimeSlots] = useState<string[]>([])
+  const [selectedCenterDistance, setSelectedCenterDistance] = useState<string | null>(null)
+
+  // Known coordinates for popular centers (approximate). Used to compute shortest distance.
+  const centerCoords: Record<string, { lat: number; lng: number }> = {
+    "Chennai E-Seva Center - Ambattur": { lat: 13.1143, lng: 80.15 },
+    "Ambattur Post Office": { lat: 13.1146, lng: 80.1545 },
+    "Chennai GPO": { lat: 13.0837, lng: 80.2717 },
+    "Egmore E-Services Hub": { lat: 13.0733, lng: 80.2606 },
+    "Coimbatore Digital Center": { lat: 11.0168, lng: 76.9558 },
+    "Coimbatore Head Post Office": { lat: 11.0016, lng: 76.9629 },
+    "Madurai E-Services Hub - South": { lat: 9.9177, lng: 78.1198 },
+    "Madurai Central Post Office": { lat: 9.9195, lng: 78.1195 },
+    "Salem Technology Center": { lat: 11.6643, lng: 78.146 },
+    "Salem Main Post Office": { lat: 11.6516, lng: 78.1607 },
+    // Fallbacks for generic/default centers
+    "District E-Center": { lat: 12.9716, lng: 77.5946 },
+    "District Post Office": { lat: 12.9716, lng: 77.5946 },
+  }
+
+  const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371 // km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180
+    const dLon = ((lon2 - lon1) * Math.PI) / 180
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2)
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    return R * c
+  }
 
   const getUserLocation = () => {
     if (navigator.geolocation) {
@@ -47,16 +76,35 @@ export default function UserPortal() {
   }
 
   const findNearestCenters = (lat: number, lng: number) => {
-    const mockCenters = [
-      { name: "Chennai E-Seva Center", distance: "2.5 km", type: "E-Center", address: "Anna Salai, Chennai" },
-      { name: "Chennai GPO", distance: "3.2 km", type: "Post Office", address: "Rajaji Salai, Chennai" },
-      { name: "Coimbatore Digital Center", distance: "15.8 km", type: "E-Center", address: "RS Puram, Coimbatore" },
-      { name: "Salem Technology Center", distance: "25.4 km", type: "E-Center", address: "Fort Main Road, Salem" },
-    ]
-    setNearestCenters(mockCenters.sort((a, b) => Number.parseFloat(a.distance) - Number.parseFloat(b.distance)))
+    // Build list from currently available centers for the chosen taluk
+    const centersInTaluk = getAvailableCenters()
+    // Map to include distance when coords known; otherwise mark N/A
+    const computed = centersInTaluk.map((name: string) => {
+      const coords = centerCoords[name]
+      if (coords) {
+        const dKm = haversineKm(lat, lng, coords.lat, coords.lng)
+        return {
+          name,
+          distance: `${dKm.toFixed(1)} km`,
+          numericDistance: dKm,
+          type: "Center",
+          address: `${name}, ${selectedTaluk}, ${selectedDistrict}`,
+        }
+      }
+      return {
+        name,
+        distance: "N/A",
+        numericDistance: Number.POSITIVE_INFINITY,
+        type: "Center",
+        address: `${name}, ${selectedTaluk}, ${selectedDistrict}`,
+      }
+    })
+    // Sort by numeric distance, unknowns (N/A) sink to the end
+    computed.sort((a, b) => a.numericDistance - b.numericDistance)
+    setNearestCenters(computed)
   }
 
-  const handleBooking = () => {
+  const handleBooking = async () => {
     if (
       selectedDistrict &&
       selectedTaluk &&
@@ -79,7 +127,6 @@ export default function UserPortal() {
         status: "Confirmed",
       }
 
-      // Save to localStorage
       const existingBookings = JSON.parse(localStorage.getItem("bookings") || "[]")
       existingBookings.push(booking)
       localStorage.setItem("bookings", JSON.stringify(existingBookings))
@@ -94,20 +141,26 @@ export default function UserPortal() {
   }
 
   const getAvailableTimeSlots = () => {
-    if (!selectedDistrict || !selectedDate || !selectedCenter) return []
+    if (!selectedDistrict || !selectedTaluk || !selectedCenter || !selectedDate) return []
 
     const slotSettings = JSON.parse(localStorage.getItem("slotSettings") || "{}")
-    const key = `${selectedDistrict}-${selectedDate}`
-    const enabledSlots = slotSettings[key] || []
+    const key = `${selectedDistrict}|${selectedTaluk}|${selectedCenter}|${selectedDate}`
+    const enabledSlots: string[] = slotSettings[key] || []
 
     const existingBookings = JSON.parse(localStorage.getItem("bookings") || "[]")
-    const bookedSlots = existingBookings
-      .filter((b: any) => b.date === selectedDate && b.district === selectedDistrict && b.center === selectedCenter)
+    const bookedSlots: string[] = existingBookings
+      .filter(
+        (b: any) =>
+          b.date === selectedDate &&
+          b.district === selectedDistrict &&
+          b.taluk === selectedTaluk &&
+          b.center === selectedCenter,
+      )
       .map((b: any) => b.time)
 
     const availableSlots = enabledSlots.filter((slot: string) => !bookedSlots.includes(slot))
-
-    return availableSlots.slice(0, 25 - bookedSlots.length)
+    const remaining = Math.max(25 - bookedSlots.length, 0) // enforce 25 slots per center/day safely
+    return availableSlots.slice(0, remaining)
   }
 
   const getLocationBookings = () => {
@@ -126,7 +179,30 @@ export default function UserPortal() {
 
   useEffect(() => {
     setAvailableTimeSlots(getAvailableTimeSlots())
-  }, [selectedDistrict, selectedDate, selectedCenter]) // Added selectedCenter dependency
+  }, [selectedDistrict, selectedTaluk, selectedDate, selectedCenter]) // Added selectedTaluk dependency
+
+  useEffect(() => {
+    if (userLocation && selectedTaluk) {
+      findNearestCenters(userLocation.lat, userLocation.lng)
+    } else if (!userLocation) {
+      setNearestCenters([])
+    }
+  }, [userLocation, selectedTaluk])
+
+  useEffect(() => {
+    // Compute distance to selected center when we have user location and a known center coordinate
+    if (userLocation && selectedCenter) {
+      const coords = centerCoords[selectedCenter]
+      if (coords) {
+        const d = haversineKm(userLocation.lat, userLocation.lng, coords.lat, coords.lng)
+        setSelectedCenterDistance(`${d.toFixed(1)} km`)
+      } else {
+        setSelectedCenterDistance(null)
+      }
+    } else {
+      setSelectedCenterDistance(null)
+    }
+  }, [userLocation, selectedCenter])
 
   if (bookingComplete) {
     return (
@@ -308,7 +384,6 @@ export default function UserPortal() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="text-sm text-gray-600 mt-1">Centers available in {selectedTaluk} taluk</p>
                   </div>
                 )}
 
@@ -321,6 +396,14 @@ export default function UserPortal() {
                     onChange={(e) => setSelectedDate(e.target.value)}
                     min={new Date().toISOString().split("T")[0]}
                   />
+                  {/* Show availability badge for selected date/center */}
+                  {selectedDate && selectedDistrict && selectedCenter && (
+                    <p
+                      className={`text-sm mt-1 ${availableTimeSlots.length === 0 ? "text-red-600" : "text-green-600"}`}
+                    >
+                      {availableTimeSlots.length === 0 ? "Not available" : "Available"}
+                    </p>
+                  )}
                 </div>
 
                 {selectedDistrict && selectedDate && selectedCenter && (
@@ -338,8 +421,9 @@ export default function UserPortal() {
                             </SelectItem>
                           ))
                         ) : (
-                          <SelectItem value="" disabled>
-                            No slots available for this date/center
+                          // Clearer "Not available" state in time dropdown
+                          <SelectItem value="not-available" disabled>
+                            Not available
                           </SelectItem>
                         )}
                       </SelectContent>
@@ -374,49 +458,7 @@ export default function UserPortal() {
 
           {/* Location Services and Booking Details */}
           <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <MapPin className="w-5 h-5 mr-2" />
-                  Find Nearest Centers
-                </CardTitle>
-                <CardDescription>Use your location to find the closest service centers</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Button onClick={getUserLocation} className="w-full mb-4">
-                  <Navigation className="w-4 h-4 mr-2" />
-                  Get My Location
-                </Button>
-
-                {nearestCenters.length > 0 && (
-                  <div className="space-y-3">
-                    <h4 className="font-semibold">Nearest Centers:</h4>
-                    {nearestCenters.slice(0, 3).map((center, index) => (
-                      <div key={index} className="p-3 border rounded-lg">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium">{center.name}</p>
-                            <p className="text-sm text-gray-600">{center.address}</p>
-                            <p className="text-sm text-blue-600">{center.type}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-semibold text-green-600">{center.distance}</p>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => window.open(`https://maps.google.com/maps?q=${center.address}`, "_blank")}
-                            >
-                              Directions
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
+            {/* Keeping only the Available Time Slots card */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center">
@@ -437,11 +479,8 @@ export default function UserPortal() {
                     <p className="text-sm text-gray-600">
                       {availableTimeSlots.length} slots available for {selectedDate}
                     </p>
-                    {availableTimeSlots.length === 0 && (
-                      <p className="text-sm text-red-600 mt-2">
-                        No slots have been enabled by admin for this date. Please select a different date.
-                      </p>
-                    )}
+                    {/* Emphasize not-available state here too */}
+                    {availableTimeSlots.length === 0 && <p className="text-sm text-red-600 mt-2">Not available</p>}
                   </div>
                 ) : (
                   <p className="text-sm text-gray-600">Select district and date to view available time slots</p>
@@ -452,10 +491,7 @@ export default function UserPortal() {
             {selectedDistrict && selectedTaluk && selectedCenter && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <Users className="w-5 h-5 mr-2" />
-                    Existing Bookings at {selectedCenter}
-                  </CardTitle>
+                  <CardTitle className="flex items-center">Existing Bookings at {selectedCenter}</CardTitle>
                   <CardDescription>
                     Current bookings for {selectedDistrict} - {selectedTaluk}
                   </CardDescription>
@@ -486,7 +522,6 @@ export default function UserPortal() {
                     </div>
                   ) : (
                     <div className="text-center py-6">
-                      <Users className="w-12 h-12 text-gray-300 mx-auto mb-2" />
                       <p className="text-gray-500">No bookings found for this location</p>
                       <p className="text-sm text-gray-400">Be the first to book an appointment here!</p>
                     </div>

@@ -22,6 +22,13 @@ export default function AdminPortal() {
   const [filterServiceCenter, setFilterServiceCenter] = useState("")
   const [availableSlots, setAvailableSlots] = useState<string[]>([])
   const [slotSettings, setSlotSettings] = useState<Record<string, string[]>>({})
+  const [selectedSlotTaluk, setSelectedSlotTaluk] = useState("")
+  const [selectedSlotServiceCenter, setSelectedSlotServiceCenter] = useState("")
+
+  const getSlotKey = () => {
+    if (!selectedDistrict || !selectedSlotTaluk || !selectedSlotServiceCenter || !selectedDate) return ""
+    return `${selectedDistrict}|${selectedSlotTaluk}|${selectedSlotServiceCenter}|${selectedDate}`
+  }
 
   useEffect(() => {
     // Load bookings from localStorage
@@ -74,7 +81,11 @@ export default function AdminPortal() {
   const stats = getStats()
 
   const toggleSlot = (time: string) => {
-    const key = `${selectedDistrict}-${selectedDate}`
+    const key = getSlotKey()
+    if (!key) {
+      // Require complete selection before toggling
+      return
+    }
     const currentSlots = slotSettings[key] || []
 
     let updatedSlots
@@ -94,11 +105,20 @@ export default function AdminPortal() {
   }
 
   const getSlotStatus = (time: string) => {
-    const key = `${selectedDistrict}-${selectedDate}`
-    const availableSlots = slotSettings[key] || []
-    const isAvailable = availableSlots.includes(time)
+    const key = getSlotKey()
+    if (!key) return "disabled"
 
-    const isBooked = bookings.some((b) => b.date === selectedDate && b.time === time && b.district === selectedDistrict)
+    const enabledSlots = slotSettings[key] || []
+    const isAvailable = enabledSlots.includes(time)
+
+    const isBooked = bookings.some(
+      (b) =>
+        b.date === selectedDate &&
+        b.time === time &&
+        b.district === selectedDistrict &&
+        b.taluk === selectedSlotTaluk &&
+        b.center === selectedSlotServiceCenter,
+    )
 
     if (isBooked) return "booked"
     if (isAvailable) return "available"
@@ -405,12 +425,19 @@ export default function AdminPortal() {
           <Card>
             <CardHeader>
               <CardTitle>Slot Management</CardTitle>
-              <CardDescription>Enable/disable time slots for different districts and dates</CardDescription>
+              <CardDescription>Enable/disable time slots per District → Taluk → Center → Date</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
                 <Label>District</Label>
-                <Select value={selectedDistrict} onValueChange={setSelectedDistrict}>
+                <Select
+                  value={selectedDistrict}
+                  onValueChange={(value) => {
+                    setSelectedDistrict(value)
+                    setSelectedSlotTaluk("")
+                    setSelectedSlotServiceCenter("")
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select district" />
                   </SelectTrigger>
@@ -425,22 +452,74 @@ export default function AdminPortal() {
               </div>
 
               <div>
+                <Label>Taluk</Label>
+                <Select
+                  value={selectedSlotTaluk}
+                  onValueChange={(value) => {
+                    setSelectedSlotTaluk(value)
+                    setSelectedSlotServiceCenter("")
+                  }}
+                  disabled={!selectedDistrict}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select taluk" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedDistrict &&
+                      (tamilNaduData[selectedDistrict] || []).map((taluk) => (
+                        <SelectItem key={taluk} value={taluk}>
+                          {taluk}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Service Center</Label>
+                <Select
+                  value={selectedSlotServiceCenter}
+                  onValueChange={setSelectedSlotServiceCenter}
+                  disabled={!selectedSlotTaluk}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select center" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(selectedSlotTaluk ? talukCenters[selectedSlotTaluk] || talukCenters.default : []).map(
+                      (center: string) => (
+                        <SelectItem key={center} value={center}>
+                          {center}
+                        </SelectItem>
+                      ),
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
                 <Label htmlFor="date">Date</Label>
                 <Input
                   id="date"
                   type="date"
                   value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value)
+                  }}
                   min={new Date().toISOString().split("T")[0]}
+                  disabled={!selectedSlotServiceCenter}
                 />
               </div>
 
-              {selectedDistrict && selectedDate && (
+              {selectedDistrict && selectedSlotTaluk && selectedSlotServiceCenter && selectedDate && (
                 <div>
-                  <div className="flex justify-between items-center mb-3">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-3 gap-2">
                     <Label>Time Slots (Click to enable/disable)</Label>
                     <div className="text-sm text-gray-600">
-                      {slotSettings[`${selectedDistrict}-${selectedDate}`]?.length || 0} slots enabled
+                      {slotSettings[getSlotKey()]?.length || 0} slots enabled ·{" "}
+                      <span className="font-medium">
+                        {selectedDistrict} → {selectedSlotTaluk} → {selectedSlotServiceCenter} → {selectedDate}
+                      </span>
                     </div>
                   </div>
                   <div className="grid grid-cols-5 gap-2">
